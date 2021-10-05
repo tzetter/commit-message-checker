@@ -21,6 +21,6 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Check
-        uses: tzetter/commit-message-checker
+        uses: tzetter/commit-message-checker@v1
 ```
 
