@@ -1,0 +1,12 @@
+name: 'Commit message check'
+description: 'Check commit messages according to an opinionated style'
+author: 'Tobias Zetter'
+runs:
+  using: 'composite'
+  steps:
+    - uses: actions/setup-python@v2
+    - run: python check.py ${{ github.event.head_commit.message }}
+      shell: bash
+branding:
+  icon: 'edit-3'
+  color: 'red'
