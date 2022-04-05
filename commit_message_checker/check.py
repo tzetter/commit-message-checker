@@ -960,7 +960,7 @@ def get_commit_message():
                 return f.read()
         return ' '.join(sys.argv[1:])
 
-if __name__ == '__main__':
+def check_commit_message():
     message = get_commit_message()
     if not message:
         print('Commit message not found')
@@ -974,3 +974,6 @@ if __name__ == '__main__':
         for error in message_errors:
             print(error)
         sys.exit(1)
+
+if __name__ == '__main__':
+    check_commit_message()

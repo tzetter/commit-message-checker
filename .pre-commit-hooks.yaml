@@ -1,0 +1,7 @@
+-   id: commit-message-checker
+    name: commit-message-checker
+    description: This hook checks commit messages according to an opinionated style.
+    entry: commit-message-checker
+    language: python
+    stages: [commit-msg]
+    always_run: true

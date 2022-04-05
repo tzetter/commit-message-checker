@@ -5,7 +5,7 @@ runs:
   using: 'composite'
   steps:
     - uses: actions/setup-python@v2
-    - run: python ${{ github.action_path }}/check.py ${{ github.event.head_commit.message }}
+    - run: python ${{ github.action_path }}/commit_message_checker/check.py ${{ github.event.head_commit.message }}
       shell: bash
 branding:
   icon: 'edit-3'
