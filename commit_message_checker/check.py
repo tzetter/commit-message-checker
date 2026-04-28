@@ -1,4 +1,6 @@
 #!/usr/local/bin/python3
+import argparse
+import os
 import re
 import sys
 
@@ -1676,6 +1678,19 @@ frequent_verbs = (
 
 suffix_hash_code_re = r'\s?\(\s*#[a-zA-Z_0-9]+\s*\)$'
 
+conventional_commit_re = re.compile(
+    r'^(?:feat|fix|docs|style|refactor|perf|test|build|ci|chore|revert)'
+    r'(?:\([^)]+\))?!?:\s+'
+)
+
+# Prefixes that indicate auto-generated commits that should not be checked
+auto_generated_prefixes = (
+    'Merge branch ',
+    'Merge pull request ',
+    'Revert "',
+    'Squashed commit of the following:',
+)
+
 def check_subject(subject: str, verbs: list[str]):
     errors = []
 
@@ -1706,7 +1721,6 @@ def check_subject(subject: str, verbs: list[str]):
                 f"Please capitalize to: {capitalized}."
             )
 
-
         first_word_lower = first_word.lower()
 
         if first_word_lower not in verbs:
@@ -1729,27 +1743,34 @@ link_definition_re = r'^\[[^\]]+]\s*:\s*[^ ]+://[^ ]+$'
 def check_body(subject: str, body_lines: list[str]):
     errors = []
 
-    if len(body_lines) == 0:
-        errors.append("At least one line is expected in the body, but got empty body.")
+    # Ignore git comment lines added by the editor during merge/rebase/edit
+    content_lines = [line for line in body_lines if not line.startswith('#')]
+
+    # Drop trailing blank lines left after comment removal
+    while content_lines and not content_lines[-1].strip():
+        content_lines.pop()
+
+    if not content_lines:
         return errors
 
-    if len(body_lines) == 1 and body_lines[0].strip() == "":
+    if len(content_lines) == 1 and not content_lines[0].strip():
         errors.append("Unexpected empty body")
         return errors
 
     for i, line in enumerate(body_lines):
+        if line.startswith('#'):
+            continue
         if re.match(url_line_re, line) or re.match(link_definition_re, line):
             continue
-
         if len(line) > 72:
             errors.append(
                 f"The line {i + 3} of the message (line {i + 1} of the body) " +
                 f"exceeds the limit of 72 characters. The line contains {len(line)} characters: " +
-                "{line}. " +
+                f"{line}. " +
                 "Please reformat the body so that all the lines fit 72 characters."
             )
 
-    body_first_word = body_lines[0].split(' ', 1)[0]
+    body_first_word = content_lines[0].split(' ', 1)[0]
     if body_first_word:
         subject_first_word = subject.split(' ', 1)[0]
         if subject_first_word:
@@ -1759,15 +1780,18 @@ def check_body(subject: str, body_lines: list[str]):
                     "the first word of the body. " +
                     "Please make the body more informative by adding more information instead of repeating " +
                     "the subject. For example, start by explaining the problem that this change is " +
-                    'intendended to solve or what was previously missing (e.g., "Previously, ....").'
+                    'intended to solve or what was previously missing (e.g., "Previously, ....").'
                 )
 
     return errors
 
-def check(text, verbs):
+def check(text, verbs, conventional_commits='allow'):
     errors = []
-    if text.startswith("Merge branch"):
-        return errors
+
+    # Skip auto-generated commits that don't follow normal conventions
+    for prefix in auto_generated_prefixes:
+        if text.startswith(prefix):
+            return errors
 
     trimmed_lines = [line.strip() for line in text.split('\n')]
 
@@ -1776,29 +1800,96 @@ def check(text, verbs):
         return errors
 
     subject = trimmed_lines[0]
-    errors += check_subject(subject, verbs)
+
+    prefix_match = conventional_commit_re.match(subject)
+
+    if conventional_commits == 'require' and not prefix_match:
+        errors.append(
+            "The subject must start with a conventional commit type "
+            "(e.g. 'feat:', 'fix:', 'chore:'), "
+            f"but got: {subject}."
+        )
+        return errors
+    elif conventional_commits == 'disallow' and prefix_match:
+        errors.append(
+            "Conventional commit prefixes (e.g. 'feat:', 'fix:') are not allowed, "
+            f"but the subject starts with one: {subject}."
+        )
+
+    # Strip the conventional commit prefix before verb/length checks
+    effective_subject = subject[prefix_match.end():] if prefix_match and conventional_commits in ('allow', 'require') else subject
+
+    errors += check_subject(effective_subject, verbs)
 
     if len(trimmed_lines) > 2:
-        errors += check_body(subject, trimmed_lines[2:])
+        errors += check_body(effective_subject, trimmed_lines[2:])
 
     return errors
 
-def get_commit_message():
-    if len(sys.argv) > 0:
-        if '.git' in sys.argv[1]:
-            with open(sys.argv[1], "r") as f:
-                return f.read()
-        return ' '.join(sys.argv[1:])
+def get_commit_message(args):
+    if os.path.isfile(args.message):
+        with open(args.message, 'r') as f:
+            return f.read()
+    return args.message
+
+def get_effective_first_word(message, conventional_commits):
+    for prefix in auto_generated_prefixes:
+        if message.startswith(prefix):
+            return None
+    lines = [line.strip() for line in message.split('\n')]
+    if not lines or not lines[0]:
+        return None
+    subject = lines[0]
+    prefix_match = conventional_commit_re.match(subject)
+    if prefix_match and conventional_commits in ('allow', 'require'):
+        subject = subject[prefix_match.end():]
+    word = subject.split(' ', 1)[0] if subject else ''
+    return word.lower() if word else None
+
+def log_unknown_word(word, log_path):
+    word = word.lower()
+    try:
+        existing = set()
+        if os.path.isfile(log_path):
+            with open(log_path) as f:
+                existing = {line.strip().lower() for line in f if line.strip()}
+        if word not in existing:
+            with open(log_path, 'a') as f:
+                f.write(word + '\n')
+    except OSError:
+        pass
 
 def check_commit_message():
-    message = get_commit_message()
+    parser = argparse.ArgumentParser(description='Check commit message style.')
+    parser.add_argument('message', help='Commit message text or path to a commit message file')
+    parser.add_argument(
+        '--conventional-commits',
+        choices=['allow', 'require', 'disallow'],
+        default='allow',
+        dest='conventional_commits',
+        help='Whether conventional commit prefixes (e.g. feat:, fix:) are allowed, required, or disallowed (default: allow)',
+    )
+    parser.add_argument(
+        '--unknown-words-log',
+        default='',
+        dest='unknown_words_log',
+        help='File to append unknown first words to for later review (disabled by default; e.g. pass .git/unknown_commit_verbs.txt to keep a per-repo log)',
+    )
+    args = parser.parse_args()
+
+    message = get_commit_message(args)
     if not message:
         print('Commit message not found')
         sys.exit()
 
-    message_errors = check(message, frequent_verbs)
+    message_errors = check(message, frequent_verbs, args.conventional_commits)
 
-    if len(message_errors) == 0:
+    if args.unknown_words_log:
+        word = get_effective_first_word(message, args.conventional_commits)
+        if word and word not in frequent_verbs:
+            log_unknown_word(word, args.unknown_words_log)
+
+    if not message_errors:
         print("The message is OK.")
     else:
         for error in message_errors:
